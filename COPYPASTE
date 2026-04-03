@@ -1,496 +1,75 @@
-import { useState } from 'react';
-import { supabase } from '../lib/supabase';
-import { validateStudentEmail, validateControlNumber, validateName, validatePhone, sanitizePhone, validatePassword, containsEmoji } from '../lib/validation';
-import toast from 'react-hot-toast';
-import { ArrowRight, Loader2, Eye, EyeOff, ArrowLeft, Mail, Lock, User, Phone, ShieldCheck, GraduationCap, Hash, CalendarDays, Store } from 'lucide-react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import { AuthProvider, useAuth } from './hooks/useAuth';
+import { CartProvider } from './hooks/useCart';
 
-const CARRERAS_ITCM = [
-  'Ingeniería Ambiental',
-  'Ingeniería Eléctrica',
-  'Ingeniería Electrónica',
-  'Ingeniería en Geociencias',
-  'Ingeniería en Gestión Empresarial',
-  'Ingeniería Industrial',
-  'Ingeniería Mecánica',
-  'Ingeniería Petrolera',
-  'Ingeniería Química',
-  'Ingeniería en Sistemas Computacionales',
-  'Ingeniería en Semiconductores',
-];
+import AuthPage from './pages/AuthPage';
+import AppShell from './components/layout/AppShell';
+import CatalogPage from './pages/CatalogPage';
+import CartPage from './pages/CartPage';
+import OrdersPage from './pages/OrdersPage';
+import VendorProductsPage from './pages/VendorProductsPage';
+import VendorOrdersPage from './pages/VendorOrdersPage';
+import VendorNewRequestPage from './pages/VendorNewRequestPage';
+import AdminRequestsPage from './pages/AdminRequestsPage';
+import AdminVendorsPage from './pages/AdminVendorsPage';
+import AdminSupportPage from './pages/AdminSupportPage';
+import ProfilePage from './pages/ProfilePage';
+import UpdatePasswordPage from './pages/UpdatePasswordPage';
 
-export default function AuthPage() {
-  // 'welcome' | 'login' | 'register' | 'vendor-login' | 'comite-login'
-  const [view, setView] = useState('welcome');
-  const [loading, setLoading] = useState(false);
-  const [showPw, setShowPw] = useState(false);
-  const [showRegPw, setShowRegPw] = useState(false);
-  const [showRegPw2, setShowRegPw2] = useState(false);
-
-  // Login state
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPw, setLoginPw] = useState('');
-
-  // Register state
-  const [regName, setRegName] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regPhone, setRegPhone] = useState('');
-  const [regCarrera, setRegCarrera] = useState('');
-  const [regControl, setRegControl] = useState('');
-  const [regYear, setRegYear] = useState('');
-  const [regPw, setRegPw] = useState('');
-  const [regPw2, setRegPw2] = useState('');
-
-  // Vendor login state
-  const [vendorEmail, setVendorEmail] = useState('');
-  const [vendorPw, setVendorPw] = useState('');
-
-  // Comite login state
-  const [comiteEmail, setComiteEmail] = useState('');
-  const [comitePw, setComitePw] = useState('');
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: loginEmail.trim(), password: loginPw });
-    setLoading(false);
-    if (error) toast.error(error.message);
-    else toast.success('¡Bienvenido de vuelta!');
-  };
-
-  const handleResetPassword = async () => {
-    if (!loginEmail) {
-      toast.error('Ingresa tu correo para recuperar la contraseña.');
-      return;
-    }
-    setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim(), {
-      redirectTo: `${window.location.origin}/update-password`,
-    });
-    setLoading(false);
-    if (error) toast.error(error.message);
-    else toast.success('Se ha enviado un enlace de recuperación a tu correo.');
-  };
-
-  const handleRegister = async (e) => {
-    e.preventDefault();
-
-    // ── Validación de nombre ──
-    const nameValidation = validateName(regName);
-    if (!nameValidation.valid) { toast.error(nameValidation.error); return; }
-
-    // ── Validación de contraseñas ──
-    if (regPw !== regPw2) { toast.error('Las contraseñas no coinciden'); return; }
-    const pwValidation = validatePassword(regPw);
-    if (!pwValidation.valid) { toast.error(pwValidation.error); return; }
-
-    // ── Validación de teléfono ──
-    const phoneValidation = validatePhone(regPhone);
-    if (!phoneValidation.valid) { toast.error(phoneValidation.error); return; }
-
-    if (!regCarrera) { toast.error('Selecciona tu carrera'); return; }
-
-    // ── Validación de correo (emojis) ──
-    if (containsEmoji(regEmail)) { toast.error('El correo no puede contener emojis.'); return; }
-
-    // Validate email format
-    const emailValidation = validateStudentEmail(regEmail);
-    if (!emailValidation.valid) { toast.error(emailValidation.error); return; }
-
-    // Validate control number independently
-    const controlValidation = validateControlNumber(regControl);
-    if (!controlValidation.valid) { toast.error(controlValidation.error); return; }
-
-    // Cross-validate: control number in email must match the one entered
-    if (emailValidation.details.controlNumber !== regControl) {
-      toast.error('El número de control no coincide con tu correo institucional.'); return;
-    }
-
-    // Cross-validate: enrollment year must match
-    const yearNum = parseInt(regYear, 10);
-    if (controlValidation.details.enrollmentYear !== yearNum) {
-      toast.error(`Tu número de control indica ingreso en ${controlValidation.details.enrollmentYear}, pero seleccionaste ${yearNum}.`); return;
-    }
-
-    setLoading(true);
-    const { data, error } = await supabase.auth.signUp({
-      email: regEmail.toLowerCase().trim(), password: regPw,
-      options: { data: { full_name: regName, role: 'client' } },
-    });
-    if (error) { toast.error(error.message); setLoading(false); return; }
-    if (data.user) {
-      await supabase.from('profiles').update({
-        full_name: regName, phone: regPhone,
-        control_number: regControl,
-        enrollment_year: yearNum,
-        career: regCarrera,
-      }).eq('id', data.user.id);
-    }
-    setLoading(false);
-    toast.success('Cuenta creada. Revisa tu correo para confirmar.');
-    setView('login');
-  };
-
-  const handleVendorLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: vendorEmail.trim(), password: vendorPw });
-    setLoading(false);
-    if (error) toast.error(error.message);
-    else toast.success('¡Bienvenido, vendedor!');
-  };
-
-  const handleComiteLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: comiteEmail.trim(), password: comitePw });
-    setLoading(false);
-    if (error) toast.error(error.message);
-    else toast.success('Bienvenido, Comité');
-  };
-
-  // ═══════════════════════════════════════════
-  // WELCOME SCREEN
-  // ═══════════════════════════════════════════
-  if (view === 'welcome') {
-    return (
-      <div className="min-h-screen min-h-[100dvh] bg-white flex flex-col items-center justify-center px-8 animate-fade-in">
-        {/* Logo */}
-        <div className="mb-8">
-          <img src="/assets/logo.jpg" alt="ITCM Emprende" className="w-28 h-28 rounded-3xl mx-auto shadow-sm" />
-        </div>
-
-        {/* Title */}
-        <h1 className="font-display font-bold text-[40px] text-gray-900 leading-none tracking-tight text-center">
-          ITCM
-        </h1>
-        <h1 className="font-display font-bold text-[46px] text-gold-600 leading-none tracking-tight text-center">
-          Emprende
-        </h1>
-        <p className="text-gray-400 text-sm mt-3 tracking-widest uppercase text-center">
-          Tu mercado académico en un click
-        </p>
-
-        {/* Spacer */}
-        <div className="flex-1 min-h-[60px]" />
-
-        {/* Buttons */}
-        <div className="w-full max-w-sm space-y-3">
-          {/* Login - estudiante */}
-          <button onClick={() => setView('login')} className="btn-primary">
-            Iniciar sesión con número de control
-            <ArrowRight size={18} />
-          </button>
-
-          {/* Vendor login */}
-          <button onClick={() => setView('vendor-login')} className="btn-outline justify-center">
-            <Store size={18} className="text-blue-500" />
-            <span className="text-gray-900 font-semibold text-[15px]">Iniciar sesión como vendedor</span>
-          </button>
-
-          {/* Comite */}
-          <button onClick={() => setView('comite-login')}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gray-50 rounded-2xl text-gray-400 text-sm font-medium hover:bg-gray-100 transition">
-            <ShieldCheck size={16} />
-            Acceso comité estudiantil
-          </button>
-        </div>
-
-        {/* Footer */}
-        <div className="text-center mt-8 mb-4">
-          <p className="text-gray-300 text-xs leading-relaxed">Tecnológico Nacional de México</p>
-          <p className="text-gray-300 text-xs leading-relaxed">Instituto Tecnológico de Cd. Madero</p>
-        </div>
-      </div>
-    );
+function ProtectedRoute({ children, allowedRoles }) {
+  const { session, profile, loading } = useAuth();
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-surface">
+      <img src="/assets/logo.jpg" alt="Logo" className="w-16 h-16 rounded-2xl animate-pulse" />
+    </div>
+  );
+  if (!session) return <Navigate to="/login" replace />;
+  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
+    const d = { superadmin: '/admin/solicitudes', vendor: '/vendedor/productos', client: '/' };
+    return <Navigate to={d[profile.role] || '/'} replace />;
   }
+  return children;
+}
 
-  // ═══════════════════════════════════════════
-  // BACK HEADER (for all sub-views)
-  // ═══════════════════════════════════════════
-  const BackHeader = ({ title }) => (
-    <div className="flex items-center gap-3 mb-8">
-      <button onClick={() => setView('welcome')}
-        className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-50 hover:bg-gray-100 transition">
-        <ArrowLeft size={20} className="text-gray-500" />
-      </button>
-      <h2 className="font-display font-bold text-xl text-gray-900">{title}</h2>
+function AppRoutes() {
+  const { session, loading } = useAuth();
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-surface">
+      <img src="/assets/logo.jpg" alt="Logo" className="w-16 h-16 rounded-2xl animate-pulse" />
     </div>
   );
 
-  // ═══════════════════════════════════════════
-  // LOGIN (estudiante)
-  // ═══════════════════════════════════════════
-  if (view === 'login') {
-    return (
-      <div className="min-h-screen min-h-[100dvh] bg-white px-6 pt-14 pb-8 animate-slide-up">
-        <BackHeader title="Iniciar sesión" />
+  return (
+    <Routes>
+      <Route path="/login" element={session ? <Navigate to="/" replace /> : <AuthPage />} />
+      <Route path="/update-password" element={<UpdatePasswordPage />} />
+      <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
+        <Route path="/" element={<ProtectedRoute allowedRoles={['client']}><CatalogPage /></ProtectedRoute>} />
+        <Route path="/perfil" element={<ProtectedRoute allowedRoles={['client']}><ProfilePage /></ProtectedRoute>} />
+        <Route path="/carrito" element={<ProtectedRoute allowedRoles={['client']}><CartPage /></ProtectedRoute>} />
+        <Route path="/pedidos" element={<ProtectedRoute allowedRoles={['client']}><OrdersPage /></ProtectedRoute>} />
+        <Route path="/vendedor/productos" element={<ProtectedRoute allowedRoles={['vendor']}><VendorProductsPage /></ProtectedRoute>} />
+        <Route path="/vendedor/pedidos" element={<ProtectedRoute allowedRoles={['vendor']}><VendorOrdersPage /></ProtectedRoute>} />
+        <Route path="/vendedor/solicitud" element={<ProtectedRoute allowedRoles={['vendor']}><VendorNewRequestPage /></ProtectedRoute>} />
+        <Route path="/admin/solicitudes" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminRequestsPage /></ProtectedRoute>} />
+        <Route path="/admin/vendedores" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminVendorsPage /></ProtectedRoute>} />
+        <Route path="/admin/soporte" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminSupportPage /></ProtectedRoute>} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
 
-        <p className="text-gray-400 text-sm mb-6 -mt-4">
-          Ingresa con tu correo institucional o usuario de vendedor
-        </p>
-
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Correo o usuario</label>
-            <div className="relative">
-              <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
-                placeholder="L22070321@cdmadero.tecnm.mx" required
-                className="input-field pl-11" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Contraseña</label>
-            <div className="relative">
-              <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type={showPw ? 'text' : 'password'} value={loginPw} onChange={e => setLoginPw(e.target.value)}
-                placeholder="Tu contraseña" required minLength={6}
-                className="input-field pl-11 pr-11" />
-              <button type="button" onClick={() => setShowPw(!showPw)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="text-right">
-            <button
-              type="button"
-              onClick={handleResetPassword}
-              disabled={loading}
-              className="text-sm text-gold-600 font-medium cursor-pointer hover:text-gold-700 disabled:opacity-50 break-normal"
-            >
-              Recuperar contraseña
-            </button>
-          </div>
-
-          <button type="submit" disabled={loading} className="btn-primary mt-2">
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <>Entrar <ArrowRight size={18} /></>}
-          </button>
-        </form>
-
-        <div className="flex items-center gap-3 my-6">
-          <div className="flex-1 h-px bg-gray-100" /><span className="text-xs text-gray-300">¿No tienes cuenta?</span><div className="flex-1 h-px bg-gray-100" />
-        </div>
-
-        <button onClick={() => setView('register')} className="btn-outline justify-center">
-          <Mail size={18} className="text-blue-500" />
-          <span>Registrarme como estudiante</span>
-        </button>
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════
-  // REGISTER (estudiante) — con validaciones
-  // ═══════════════════════════════════════════
-  if (view === 'register') {
-    return (
-      <div className="min-h-screen min-h-[100dvh] bg-white px-6 pt-14 pb-8 animate-slide-up">
-        <BackHeader title="Crear cuenta de estudiante" />
-
-        <p className="text-gray-400 text-sm mb-6 -mt-4">
-          Solo correos @cdmadero.tecnm.mx con vigencia activa
-        </p>
-
-        <form onSubmit={handleRegister} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Nombre completo</label>
-            <div className="relative">
-              <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="text" value={regName} onChange={e => {
-                  const val = e.target.value;
-                  if (!containsEmoji(val)) setRegName(val);
-                }}
-                placeholder="Tu nombre completo" required className="input-field pl-11" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Correo institucional</label>
-            <div className="relative">
-              <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="email" value={regEmail} onChange={e => setRegEmail(e.target.value)}
-                placeholder="L22070321@cdmadero.tecnm.mx" required className="input-field pl-11" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">WhatsApp</label>
-            <div className="relative">
-              <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="tel" value={regPhone} onChange={e => setRegPhone(sanitizePhone(e.target.value))}
-                placeholder="833 123 4567" required maxLength={18}
-                className="input-field pl-11" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Carrera</label>
-            <div className="relative">
-              <GraduationCap size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <select value={regCarrera} onChange={e => setRegCarrera(e.target.value)}
-                required className="input-field pl-11 appearance-none cursor-pointer">
-                <option value="" disabled>Selecciona tu carrera</option>
-                {CARRERAS_ITCM.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1.5">Número de control</label>
-              <div className="relative">
-                <Hash size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-                <input type="text" value={regControl} onChange={e => setRegControl(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                  placeholder="22070321" required maxLength={8} pattern="\d{8}"
-                  className="input-field pl-11" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1.5">Año de inscripción</label>
-              <div className="relative">
-                <CalendarDays size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-                <select value={regYear} onChange={e => setRegYear(e.target.value)}
-                  required className="input-field pl-11 appearance-none cursor-pointer">
-                  <option value="" disabled>Año</option>
-                  {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i).map(y =>
-                    <option key={y} value={y}>{y}</option>
-                  )}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1.5">Contraseña</label>
-              <div className="relative">
-                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-                <input type={showRegPw ? 'text' : 'password'} value={regPw} onChange={e => setRegPw(e.target.value)}
-                  placeholder="Mín. 6 chars" required minLength={6} className="input-field pl-11 pr-11" />
-                <button type="button" onClick={() => setShowRegPw(!showRegPw)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                  {showRegPw ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500 mb-1.5">Confirmar</label>
-              <div className="relative">
-                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-                <input type={showRegPw2 ? 'text' : 'password'} value={regPw2} onChange={e => setRegPw2(e.target.value)}
-                  placeholder="Repite" required minLength={6} className="input-field pl-11 pr-11" />
-                <button type="button" onClick={() => setShowRegPw2(!showRegPw2)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                  {showRegPw2 ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <button type="submit" disabled={loading} className="btn-primary mt-2">
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <>Crear cuenta <ArrowRight size={18} /></>}
-          </button>
-        </form>
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════
-  // VENDOR LOGIN
-  // ═══════════════════════════════════════════
-  if (view === 'vendor-login') {
-    return (
-      <div className="min-h-screen min-h-[100dvh] bg-white px-6 pt-14 pb-8 animate-slide-up">
-        <BackHeader title="Acceso vendedor" />
-
-        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-2xl mb-6 -mt-2">
-          <Store size={20} className="text-blue-600 flex-shrink-0" />
-          <p className="text-sm text-blue-700">
-            Ingresa con las credenciales proporcionadas por el Comité Estudiantil
-          </p>
-        </div>
-
-        <form onSubmit={handleVendorLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Correo de vendedor</label>
-            <div className="relative">
-              <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="email" value={vendorEmail} onChange={e => setVendorEmail(e.target.value)}
-                placeholder="tu.nombre.vendor@itcmemprende.com" required className="input-field pl-11" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Contraseña</label>
-            <div className="relative">
-              <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type={showPw ? 'text' : 'password'} value={vendorPw} onChange={e => setVendorPw(e.target.value)}
-                placeholder="Contraseña del vendedor" required minLength={6} className="input-field pl-11 pr-11" />
-              <button type="button" onClick={() => setShowPw(!showPw)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <button type="submit" disabled={loading} className="btn-primary mt-2">
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <><Store size={18} /> Entrar como vendedor</>}
-          </button>
-        </form>
-
-        <p className="text-center text-xs text-gray-300 mt-6">
-          ¿Aún no tienes cuenta? Solicita tu registro desde tu perfil de estudiante.
-        </p>
-      </div>
-    );
-  }
-
-  // ═══════════════════════════════════════════
-  // COMITÉ LOGIN
-  // ═══════════════════════════════════════════
-  if (view === 'comite-login') {
-    return (
-      <div className="min-h-screen min-h-[100dvh] bg-white px-6 pt-14 pb-8 animate-slide-up">
-        <BackHeader title="Acceso Comité Estudiantil" />
-
-        <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-2xl mb-6 -mt-2">
-          <ShieldCheck size={20} className="text-amber-600 flex-shrink-0" />
-          <p className="text-sm text-amber-700">
-            Acceso exclusivo para miembros del Comité Estudiantil / Administrativo
-          </p>
-        </div>
-
-        <form onSubmit={handleComiteLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Correo del Comité</label>
-            <div className="relative">
-              <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type="email" value={comiteEmail} onChange={e => setComiteEmail(e.target.value)}
-                placeholder="comite@itcmemprende.com" required className="input-field pl-11" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-500 mb-1.5">Contraseña</label>
-            <div className="relative">
-              <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
-              <input type={showPw ? 'text' : 'password'} value={comitePw} onChange={e => setComitePw(e.target.value)}
-                placeholder="Contraseña del Comité" required minLength={6} className="input-field pl-11 pr-11" />
-              <button type="button" onClick={() => setShowPw(!showPw)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <button type="submit" disabled={loading} className="btn-primary mt-2">
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <><ShieldCheck size={18} /> Acceder como Comité</>}
-          </button>
-        </form>
-      </div>
-    );
-  }
-
-  return null;
+export default function App() {
+  return (
+    <AuthProvider>
+      <CartProvider>
+        <AppRoutes />
+        <Toaster position="top-center" toastOptions={{
+          style: { background: '#111', color: '#fff', border: '1px solid #e5e7eb20', borderRadius: '12px', fontSize: '14px', fontFamily: 'Plus Jakarta Sans, sans-serif' },
+        }} />
+      </CartProvider>
+    </AuthProvider>
+  );
 }
