@@ -63,7 +63,9 @@ export default function AuthPage() {
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim());
+    const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.trim(), {
+      redirectTo: `${window.location.origin}/update-password`,
+    });
     setLoading(false);
     if (error) toast.error(error.message);
     else toast.success('Se ha enviado un enlace de recuperación a tu correo.');
