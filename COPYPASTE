@@ -1,67 +1,423 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../hooks/useAuth';
+import toast from 'react-hot-toast';
+import {
+  User, Mail, GraduationCap, Hash, CalendarDays, Phone,
+  Store, Send, Loader2, ChevronRight, CheckCircle2, Clock, XCircle,
+  Camera, Pencil, Check, X,
+} from 'lucide-react';
 
-const AuthContext = createContext(null);
+const CAREER_OPTIONS = [
+  'Ingeniería en Sistemas Computacionales',
+  'Ingeniería Industrial',
+  'Ingeniería Electromecánica',
+  'Ingeniería Electrónica',
+  'Ingeniería Química',
+  'Ingeniería en Gestión Empresarial',
+  'Ingeniería Civil',
+  'Licenciatura en Administración',
+  'Contador Público',
+];
 
-export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [loading, setLoading] = useState(true);
+export default function ProfilePage() {
+  const { profile, fetchProfile, session } = useAuth();
+  const [showVendorForm, setShowVendorForm] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [existingRequest, setExistingRequest] = useState(null);
+  const [loadingRequest, setLoadingRequest] = useState(true);
 
-  const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    setProfile(data);
-    return data;
+  // Editable fields
+  const [editingField, setEditingField] = useState(null); // 'career' | 'phone'
+  const [editCareer, setEditCareer] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [savingField, setSavingField] = useState(false);
+
+  // Avatar upload
+  const fileInputRef = useRef(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  // Vendor request form state
+  const [vrBusiness, setVrBusiness] = useState('');
+  const [vrDesc, setVrDesc] = useState('');
+  const [vrPhoto1, setVrPhoto1] = useState('');
+  const [vrPhoto2, setVrPhoto2] = useState('');
+
+  // Check if user already has a vendor request
+  useEffect(() => {
+    const checkExisting = async () => {
+      if (!profile?.email) return;
+      const { data } = await supabase
+        .from('vendor_requests')
+        .select('*')
+        .eq('applicant_email', profile.email)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setExistingRequest(data);
+      setLoadingRequest(false);
+    };
+    checkExisting();
+  }, [profile?.email]);
+
+  // Start editing a field
+  const startEdit = (field) => {
+    setEditingField(field);
+    if (field === 'career') setEditCareer(profile?.career || '');
+    if (field === 'phone') setEditPhone(profile?.phone || '');
   };
 
-  useEffect(() => {
-    // Safety timeout: if auth takes too long, stop loading anyway
-    const timeout = setTimeout(() => {
-      setLoading(false);
-    }, 10000);
+  const cancelEdit = () => {
+    setEditingField(null);
+  };
 
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      if (s?.user) fetchProfile(s.user.id).catch(() => {}).finally(() => { setLoading(false); clearTimeout(timeout); });
-      else { setLoading(false); clearTimeout(timeout); }
-    }).catch(() => {
-      // If getSession fails (corrupt token), clear and stop loading
-      setLoading(false);
-      clearTimeout(timeout);
-    });
+  // Save field
+  const saveField = async (field) => {
+    setSavingField(true);
+    const updates = {};
+    if (field === 'career') updates.career = editCareer;
+    if (field === 'phone') updates.phone = editPhone;
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
-      setSession(s);
-      if (s?.user) {
-        try { await fetchProfile(s.user.id); } catch {}
-      } else { setProfile(null); }
-      setLoading(false);
-      clearTimeout(timeout);
-    });
+    const { error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', session.user.id);
 
-    return () => { subscription.unsubscribe(); clearTimeout(timeout); };
-  }, []);
-
-  const signOut = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (error) {
-      console.error('Error signing out:', error);
-    } finally {
-      setSession(null);
-      setProfile(null);
+    setSavingField(false);
+    if (error) {
+      toast.error('Error al actualizar: ' + error.message);
+    } else {
+      toast.success('¡Actualizado correctamente!');
+      setEditingField(null);
+      await fetchProfile(session.user.id);
     }
   };
 
+  // Handle avatar upload
+  const handleAvatarUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file
+    if (!file.type.startsWith('image/')) {
+      toast.error('Por favor selecciona una imagen válida.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('La imagen no debe superar 2MB.');
+      return;
+    }
+
+    setUploadingAvatar(true);
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${session.user.id}/avatar.${fileExt}`;
+
+    // Upload to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, file, { upsert: true });
+
+    if (uploadError) {
+      toast.error('Error al subir imagen: ' + uploadError.message);
+      setUploadingAvatar(false);
+      return;
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('avatars')
+      .getPublicUrl(filePath);
+
+    const avatarUrl = urlData.publicUrl + '?t=' + Date.now(); // cache bust
+
+    // Update profile
+    const { error: updateError } = await supabase
+      .from('profiles')
+      .update({ avatar_url: avatarUrl })
+      .eq('id', session.user.id);
+
+    setUploadingAvatar(false);
+    if (updateError) {
+      toast.error('Error al guardar: ' + updateError.message);
+    } else {
+      toast.success('¡Foto de perfil actualizada!');
+      await fetchProfile(session.user.id);
+    }
+  };
+
+  const handleVendorRequest = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const photos = [vrPhoto1, vrPhoto2].filter(u => u.trim());
+    const { error } = await supabase.from('vendor_requests').insert({
+      applicant_name: profile.full_name,
+      applicant_email: profile.email,
+      applicant_phone: profile.phone,
+      business_name: vrBusiness,
+      business_description: vrDesc,
+      product_photos: photos,
+    });
+    setLoading(false);
+    if (error) {
+      toast.error('Error: ' + error.message);
+    } else {
+      toast.success('¡Solicitud enviada! El Comité la revisará pronto.');
+      setShowVendorForm(false);
+      const { data } = await supabase
+        .from('vendor_requests')
+        .select('*')
+        .eq('applicant_email', profile.email)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setExistingRequest(data);
+    }
+  };
+
+  // Build info items — career and control_number are editable
+  const infoItems = [
+    { icon: User, label: 'Nombre', value: profile?.full_name },
+    { icon: Mail, label: 'Correo', value: profile?.email },
+    { icon: GraduationCap, label: 'Carrera', value: profile?.career, editable: true, field: 'career' },
+    { icon: Hash, label: 'No. Control', value: profile?.control_number },
+    { icon: CalendarDays, label: 'Año de inscripción', value: profile?.enrollment_year },
+    { icon: Phone, label: 'WhatsApp', value: profile?.phone, editable: true, field: 'phone' },
+  ].filter(item => item.value || item.editable);
+
+  const statusConfig = {
+    pending: { icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200', label: 'Pendiente de revisión', desc: 'El Comité está revisando tu solicitud.' },
+    approved: { icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200', label: '¡Aprobada!', desc: 'Tu solicitud fue aprobada. Revisa tu correo para tus credenciales de vendedor.' },
+    rejected: { icon: XCircle, color: 'text-red-500', bg: 'bg-red-50 border-red-200', label: 'Rechazada', desc: 'Tu solicitud fue rechazada.' },
+  };
+
   return (
-    <AuthContext.Provider value={{ session, profile, loading, signOut, fetchProfile }}>
-      {children}
-    </AuthContext.Provider>
+    <div>
+      <h1 className="font-display font-bold text-2xl text-gray-900 tracking-tight mb-1">Mi perfil</h1>
+      <p className="text-gray-400 text-sm mb-6">Tu información de estudiante</p>
+
+      {/* Student Info Card */}
+      <div className="card p-5 mb-5">
+        {/* Avatar + Name Header */}
+        <div className="flex items-center gap-4 mb-5">
+          {/* Avatar with upload */}
+          <div className="relative group">
+            <div
+              className="w-16 h-16 rounded-2xl overflow-hidden bg-gold-50 flex items-center justify-center cursor-pointer border-2 border-transparent hover:border-gold-300 transition-all"
+              onClick={() => fileInputRef.current?.click()}
+              title="Cambiar foto de perfil"
+            >
+              {uploadingAvatar ? (
+                <Loader2 size={24} className="text-gold-600 animate-spin" />
+              ) : profile?.avatar_url ? (
+                <img
+                  src={profile.avatar_url}
+                  alt="Foto de perfil"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <User size={28} className="text-gold-600" />
+              )}
+            </div>
+            {/* Camera overlay */}
+            <div
+              className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-gold-500 text-white flex items-center justify-center shadow-lg cursor-pointer hover:bg-gold-600 transition-colors"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Camera size={14} />
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarUpload}
+              className="hidden"
+            />
+          </div>
+          <div>
+            <h2 className="font-display font-bold text-lg text-gray-900">{profile?.full_name}</h2>
+            <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-600">
+              Estudiante
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          {infoItems.map((item, i) => {
+            const Icon = item.icon;
+            const isEditing = editingField === item.field;
+
+            return (
+              <div key={i} className="flex items-center gap-3 py-2 border-b border-gray-50 last:border-0">
+                <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center flex-shrink-0">
+                  <Icon size={16} className="text-gray-400" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] text-gray-300 uppercase tracking-wider font-medium">{item.label}</p>
+
+                  {isEditing && item.field === 'career' ? (
+                    <select
+                      value={editCareer}
+                      onChange={e => setEditCareer(e.target.value)}
+                      className="w-full mt-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 bg-white"
+                      autoFocus
+                    >
+                      <option value="">Selecciona una carrera</option>
+                      {CAREER_OPTIONS.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  ) : isEditing && item.field === 'phone' ? (
+                    <input
+                      type="tel"
+                      value={editPhone}
+                      onChange={e => setEditPhone(e.target.value)}
+                      className="w-full mt-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      placeholder="Ej: 8331234567"
+                      autoFocus
+                    />
+                  ) : (
+                    <p className="text-sm text-gray-700 truncate">{item.value || <span className="text-gray-300 italic">Sin definir</span>}</p>
+                  )}
+                </div>
+
+                {/* Edit / Save / Cancel buttons */}
+                {item.editable && !isEditing && (
+                  <button
+                    onClick={() => startEdit(item.field)}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-gray-300 hover:text-gold-600 hover:bg-gold-50 transition-all flex-shrink-0"
+                    title={`Editar ${item.label}`}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
+
+                {item.editable && isEditing && (
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => saveField(item.field)}
+                      disabled={savingField}
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-emerald-600 hover:bg-emerald-50 transition-all"
+                      title="Guardar"
+                    >
+                      {savingField ? <Loader2 size={14} className="animate-spin" /> : <Check size={16} />}
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 transition-all"
+                      title="Cancelar"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Vendor Request Section */}
+      <div className="card overflow-hidden">
+        {/* Header */}
+        <button
+          onClick={() => !existingRequest && setShowVendorForm(!showVendorForm)}
+          className={`w-full flex items-center gap-4 p-5 text-left transition ${!existingRequest ? 'hover:bg-gray-50 cursor-pointer' : ''}`}
+        >
+          <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center flex-shrink-0">
+            <Store size={24} className="text-blue-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="font-display font-bold text-sm text-gray-900">¿Quieres ser vendedor?</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Envía tu solicitud al Comité Estudiantil</p>
+          </div>
+          {!existingRequest && (
+            <ChevronRight size={18} className={`text-gray-300 transition-transform ${showVendorForm ? 'rotate-90' : ''}`} />
+          )}
+        </button>
+
+        {/* Existing Request Status */}
+        {loadingRequest ? (
+          <div className="px-5 pb-5">
+            <div className="h-16 rounded-xl bg-gray-50 animate-pulse" />
+          </div>
+        ) : existingRequest ? (
+          <div className="px-5 pb-5">
+            {(() => {
+              const status = statusConfig[existingRequest.status] || statusConfig.pending;
+              const Icon = status.icon;
+              return (
+                <div className={`flex items-start gap-3 p-4 rounded-2xl border ${status.bg}`}>
+                  <Icon size={20} className={`${status.color} flex-shrink-0 mt-0.5`} />
+                  <div>
+                    <p className={`text-sm font-semibold ${status.color}`}>{status.label}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{status.desc}</p>
+                    {existingRequest.business_name && (
+                      <p className="text-xs text-gray-400 mt-1">🏪 {existingRequest.business_name}</p>
+                    )}
+                    {existingRequest.status === 'rejected' && existingRequest.rejection_reason && (
+                      <p className="text-xs text-red-400 mt-1">Motivo: {existingRequest.rejection_reason}</p>
+                    )}
+                    {existingRequest.status === 'approved' && existingRequest.generated_email && (
+                      <div className="mt-2 p-2 bg-white rounded-lg border border-emerald-200">
+                        <p className="text-xs text-emerald-700 font-mono">📧 {existingRequest.generated_email}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {existingRequest.status === 'rejected' && (
+              <button
+                onClick={() => { setExistingRequest(null); setShowVendorForm(true); }}
+                className="w-full mt-3 px-4 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-sm font-semibold hover:bg-blue-100 transition border border-blue-200">
+                Enviar nueva solicitud
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {/* Vendor Request Form */}
+        {showVendorForm && !existingRequest && (
+          <div className="px-5 pb-5 border-t border-gray-100 animate-slide-up">
+            <p className="text-gray-400 text-xs mt-4 mb-4">
+              Completa los datos de tu emprendimiento. El Comité revisará tu solicitud y te proporcionará credenciales de vendedor.
+            </p>
+
+            <form onSubmit={handleVendorRequest} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-500 mb-1.5">Nombre de tu emprendimiento</label>
+                <input type="text" value={vrBusiness} onChange={e => setVrBusiness(e.target.value)}
+                  placeholder="Ej: Snacks Mary, TechRepair, Café del Campus..." required className="input-field" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-500 mb-1.5">Describe tus productos/servicios</label>
+                <textarea value={vrDesc} onChange={e => setVrDesc(e.target.value)} rows={3}
+                  placeholder="¿Qué vendes? ¿Cuáles son tus precios? ¿Horarios de venta?" required className="input-field resize-none" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-500 mb-1.5">Fotos de tus productos (URLs)</label>
+                <input type="url" value={vrPhoto1} onChange={e => setVrPhoto1(e.target.value)}
+                  placeholder="Enlace de imagen 1" className="input-field" />
+                <input type="url" value={vrPhoto2} onChange={e => setVrPhoto2(e.target.value)}
+                  placeholder="Enlace de imagen 2 (opcional)" className="input-field mt-2" />
+                <p className="text-xs text-gray-300 mt-1">Sube tus fotos a Imgur o Drive y pega el enlace</p>
+              </div>
+
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setShowVendorForm(false)}
+                  className="flex-1 px-4 py-2.5 bg-gray-50 text-gray-500 rounded-xl text-sm font-semibold hover:bg-gray-100 transition">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={loading}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-500 transition">
+                  {loading ? <Loader2 size={16} className="animate-spin" /> : <><Send size={16} /> Enviar solicitud</>}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
-
-export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be inside AuthProvider');
-  return ctx;
-};
