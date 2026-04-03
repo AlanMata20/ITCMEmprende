@@ -1,75 +1,67 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
-import { AuthProvider, useAuth } from './hooks/useAuth';
-import { CartProvider } from './hooks/useCart';
+import { createContext, useContext, useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
 
-import AuthPage from './pages/AuthPage';
-import AppShell from './components/layout/AppShell';
-import CatalogPage from './pages/CatalogPage';
-import CartPage from './pages/CartPage';
-import OrdersPage from './pages/OrdersPage';
-import VendorProductsPage from './pages/VendorProductsPage';
-import VendorOrdersPage from './pages/VendorOrdersPage';
-import VendorNewRequestPage from './pages/VendorNewRequestPage';
-import AdminRequestsPage from './pages/AdminRequestsPage';
-import AdminVendorsPage from './pages/AdminVendorsPage';
-import AdminSupportPage from './pages/AdminSupportPage';
-import ProfilePage from './pages/ProfilePage';
-import UpdatePasswordPage from './pages/UpdatePasswordPage';
+const AuthContext = createContext(null);
 
-function ProtectedRoute({ children, allowedRoles }) {
-  const { session, profile, loading } = useAuth();
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-surface">
-      <img src="/assets/logo.jpg" alt="Logo" className="w-16 h-16 rounded-2xl animate-pulse" />
-    </div>
-  );
-  if (!session) return <Navigate to="/login" replace />;
-  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
-    const d = { superadmin: '/admin/solicitudes', vendor: '/vendedor/productos', client: '/' };
-    return <Navigate to={d[profile.role] || '/'} replace />;
-  }
-  return children;
-}
+export function AuthProvider({ children }) {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-function AppRoutes() {
-  const { session, loading } = useAuth();
-  if (loading) return (
-    <div className="min-h-screen flex items-center justify-center bg-surface">
-      <img src="/assets/logo.jpg" alt="Logo" className="w-16 h-16 rounded-2xl animate-pulse" />
-    </div>
-  );
+  const fetchProfile = async (userId) => {
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    setProfile(data);
+    return data;
+  };
+
+  useEffect(() => {
+    // Safety timeout: if auth takes too long, stop loading anyway
+    const timeout = setTimeout(() => {
+      setLoading(false);
+    }, 10000);
+
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      if (s?.user) fetchProfile(s.user.id).catch(() => {}).finally(() => { setLoading(false); clearTimeout(timeout); });
+      else { setLoading(false); clearTimeout(timeout); }
+    }).catch(() => {
+      // If getSession fails (corrupt token), clear and stop loading
+      setLoading(false);
+      clearTimeout(timeout);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, s) => {
+      setSession(s);
+      if (s?.user) {
+        try { await fetchProfile(s.user.id); } catch {}
+      } else { setProfile(null); }
+      setLoading(false);
+      clearTimeout(timeout);
+    });
+
+    return () => { subscription.unsubscribe(); clearTimeout(timeout); };
+  }, []);
+
+  const signOut = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    } finally {
+      setSession(null);
+      setProfile(null);
+    }
+  };
 
   return (
-    <Routes>
-      <Route path="/login" element={session ? <Navigate to="/" replace /> : <AuthPage />} />
-      <Route path="/update-password" element={<UpdatePasswordPage />} />
-      <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
-        <Route path="/" element={<ProtectedRoute allowedRoles={['client']}><CatalogPage /></ProtectedRoute>} />
-        <Route path="/perfil" element={<ProtectedRoute allowedRoles={['client']}><ProfilePage /></ProtectedRoute>} />
-        <Route path="/carrito" element={<ProtectedRoute allowedRoles={['client']}><CartPage /></ProtectedRoute>} />
-        <Route path="/pedidos" element={<ProtectedRoute allowedRoles={['client']}><OrdersPage /></ProtectedRoute>} />
-        <Route path="/vendedor/productos" element={<ProtectedRoute allowedRoles={['vendor']}><VendorProductsPage /></ProtectedRoute>} />
-        <Route path="/vendedor/pedidos" element={<ProtectedRoute allowedRoles={['vendor']}><VendorOrdersPage /></ProtectedRoute>} />
-        <Route path="/vendedor/solicitud" element={<ProtectedRoute allowedRoles={['vendor']}><VendorNewRequestPage /></ProtectedRoute>} />
-        <Route path="/admin/solicitudes" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminRequestsPage /></ProtectedRoute>} />
-        <Route path="/admin/vendedores" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminVendorsPage /></ProtectedRoute>} />
-        <Route path="/admin/soporte" element={<ProtectedRoute allowedRoles={['superadmin']}><AdminSupportPage /></ProtectedRoute>} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <AuthContext.Provider value={{ session, profile, loading, signOut, fetchProfile }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 
-export default function App() {
-  return (
-    <AuthProvider>
-      <CartProvider>
-        <AppRoutes />
-        <Toaster position="top-center" toastOptions={{
-          style: { background: '#111', color: '#fff', border: '1px solid #e5e7eb20', borderRadius: '12px', fontSize: '14px', fontFamily: 'Plus Jakarta Sans, sans-serif' },
-        }} />
-      </CartProvider>
-    </AuthProvider>
-  );
-}
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be inside AuthProvider');
+  return ctx;
+};
